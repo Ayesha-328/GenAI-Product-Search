@@ -36,3 +36,5 @@ C:\Users\ayesh\Full Stack\AISearchModel\ProductSearchApi\obj\Debug\net9.0\Produc
 C:\Users\ayesh\Full Stack\AISearchModel\ProductSearchApi\obj\Debug\net9.0\ref\ProductSearchApi.dll
 C:\Users\ayesh\Full Stack\AISearchModel\ProductSearchApi\bin\Debug\net9.0\DotNetEnv.dll
 C:\Users\ayesh\Full Stack\AISearchModel\ProductSearchApi\bin\Debug\net9.0\Sprache.dll
+C:\Users\ayesh\Full Stack\AISearchModel\ProductSearchApi\obj\Debug\net9.0\ProductSearchApi.sourcelink.json
+C:\Users\ayesh\Full Stack\AISearchModel\ProductSearchApi\bin\Debug\net9.0\Assets\product_embeddings.json

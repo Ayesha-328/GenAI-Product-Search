@@ -29,7 +29,7 @@ public class ProductSearchService
         _httpClient = httpClientFactory.CreateClient();
 
         // Load the JSON file
-        var path = Path.Combine(AppContext.BaseDirectory, "Assets", "product_embeddings_cleaned.json");
+        var path = Path.Combine(AppContext.BaseDirectory, "Assets", "product_embeddings.json");
 
         var json = File.ReadAllText(path);
         _products = JsonSerializer.Deserialize<List<Product>>(json);
@@ -65,15 +65,17 @@ public class ProductSearchService
 
     Console.WriteLine("Max Price: " + (maxPrice.HasValue ? maxPrice.Value.ToString() : "null"));
     Console.WriteLine($"Search Words: {string.Join(", ", queryWords)}");
+    // Convert list to space-separated string
+var filteredQuery = string.Join(" ", queryWords);
 
     // Step 1: Strict ALL match
-    var filteredProducts = FilterProducts(_products, queryWords, maxPrice, matchAllWords: true);
+        var filteredProducts = FilterProducts(_products, filteredQuery, maxPrice, matchAllWords: true);
 
     // Step 2: Fallback to ANY match
     if (filteredProducts.Count == 0)
     {
         Console.WriteLine("⚠️ No strict match found. Falling back to flexible match...");
-        filteredProducts = FilterProducts(_products, queryWords, maxPrice, matchAllWords: false);
+        filteredProducts = FilterProducts(_products, filteredQuery, maxPrice, matchAllWords: false);
     }
 
     Console.WriteLine($"🔎 Filtered products count (before similarity): {filteredProducts.Count}");
@@ -185,59 +187,67 @@ public class ProductSearchService
         return int.TryParse(cleaned, out price);
     }
 
-    private List<Product> FilterProducts(List<Product> products, List<string> queryWords, int? maxPrice, bool matchAllWords)
+private List<Product> FilterProducts(List<Product> products, string query, int? maxPrice, bool matchAllWords)
 {
-    List<Product> textMatchedProducts = new();
+    query = query.ToLower();
 
-    foreach (var product in products)
+    // 1. Extract price from query (e.g. "under 5000")
+    var priceMatch = Regex.Match(query, @"(?:under|below|upto|less than)?\s*(\d{3,6})");
+    if (priceMatch.Success && int.TryParse(priceMatch.Groups[1].Value, out int parsedPrice))
     {
-        Dictionary<string, string> keywordMatches = new(); // keyword -> field
-
-        foreach (var qw in queryWords)
-        {
-            var matchedField = GetMatchingField(product, qw);
-            if (matchedField != null)
-                keywordMatches[qw] = matchedField;
-        }
-
-        bool isMatch = matchAllWords
-            ? queryWords.All(qw => keywordMatches.ContainsKey(qw))
-            : queryWords.Any(qw => keywordMatches.ContainsKey(qw));
-
-        if (isMatch)
-        {
-            // 🔍 Print matching info
-            Console.WriteLine($"✅ Product ID: {product.Id}");
-            foreach (var match in keywordMatches)
-            {
-                Console.WriteLine($"   - Matched Keyword: '{match.Key}' in Field: {match.Value}");
-            }
-
-            textMatchedProducts.Add(product);
-        }
+        maxPrice = parsedPrice;
     }
 
-    // If nothing matched, return empty list
-    if (textMatchedProducts.Count == 0)
-        return new List<Product>();
-
-    // Step 2: Apply max price filter if needed
-    var finalFiltered = textMatchedProducts
-        .Where(p =>
-        {
-            if (maxPrice.HasValue)
-            {
-                bool priceOk = TryParsePrice(p.Price, out int price) && price <= maxPrice.Value;
-                bool salePriceOk = TryParsePrice(p.SalePrice, out int salePrice) && salePrice <= maxPrice.Value;
-                return priceOk || salePriceOk;
-            }
-            return true;
-        })
-        .Where(p => p.Embedding != null)
+    // 2. Extract meaningful search words
+    var searchWords = query
+        .Split(new[] { ' ', ',', '.', '-', '/' }, StringSplitOptions.RemoveEmptyEntries)
+        .Where(word => word.Length > 2 && !Regex.IsMatch(word, @"^\d+$")) // skip numbers
         .ToList();
 
-    return finalFiltered;
+    Console.WriteLine("Search Words: " + string.Join(", ", searchWords));
+    Console.WriteLine("Max Price: " + (maxPrice.HasValue ? maxPrice.Value.ToString() : "Not specified"));
+
+    // 3. Main filter: by embeddings + words + price
+    var filtered = products.Where(p =>
+    {
+        bool hasEmbedding = p.Embedding != null;
+
+        bool matchesText = searchWords.Count == 0 || searchWords.Any(word =>
+            (p.Title != null && p.Title.ToLower().Contains(word)) ||
+            (p.Description != null && p.Description.ToLower().Contains(word)));
+
+        bool matchesPrice = true;
+        if (maxPrice.HasValue)
+        {
+            matchesPrice = (TryParsePrice(p.Price, out int price) && price <= maxPrice.Value)
+                        || (TryParsePrice(p.SalePrice, out int salePrice) && salePrice <= maxPrice.Value);
+        }
+
+        return hasEmbedding && matchesText && matchesPrice;
+    }).ToList();
+
+    Console.WriteLine($"🔎 Filtered products count (before similarity): {filtered.Count}");
+
+    // 4. Fallback: if no matches and price mentioned, fallback to price-only
+    if (filtered.Count == 0 && maxPrice.HasValue)
+    {
+        Console.WriteLine("⚠️ No strict match found. Falling back to price-only match...");
+
+        filtered = products.Where(p =>
+        {
+            bool hasEmbedding = p.Embedding != null;
+            bool matchesPrice = (TryParsePrice(p.Price, out int price) && price <= maxPrice.Value)
+                             || (TryParsePrice(p.SalePrice, out int salePrice) && salePrice <= maxPrice.Value);
+            return hasEmbedding && matchesPrice;
+        }).ToList();
+
+        Console.WriteLine($"🔄 Price-only filtered count: {filtered.Count}");
+    }
+
+    return filtered;
 }
+
+
 
     private string GetMatchingField(Product p, string keyword)
     {
@@ -273,7 +283,7 @@ public class ProductSearchService
             new
             {
                 role = "system",
-                content ="You are a search engine query optimizer that: 1. Correct any spelling errors. 2. Return a list of important keywords including: - Corrected terms  - Their synonyms or related category terms and Pakistani clothing items like if someone searches shirts its Pakistani similar clotings are kurta, top, kameez etc. for scarf its dupatta, shawl and if magenta is searched its similar term might be purple that belong to the same color family just like these examples return similar terms 3. Return only space separated keywords. No explanation or extra text."
+                content ="You are a search engine query optimizer that: 1. Correct any spelling errors. 2. Return a list of important keywords including: - Corrected terms  - Their synonyms or related category terms and Pakistani clothing items like if someone searches shirts, kurti its Pakistani similar clotings are kurta, top, kameez etc. for scarf its dupatta, shawl and if magenta is searched its similar term might be pink, red, purple that belong to the same color family just like these examples return similar terms 3. Return only space separated keywords. No explanation or extra text."
             },
             new
             {
